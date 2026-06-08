@@ -101,16 +101,25 @@ canvas{display:block}
 
 @page{ margin:0 }   /* supprime date, URL, titre et numéro de page du navigateur */
 @media print{
+  /* Réinitialiser le body — supprime le padding:20px du générateur */
+  html,body{
+    margin:0!important;padding:0!important;
+    background:white!important;
+    width:100%!important;height:auto!important;
+  }
   /* Masquer le générateur et toute l'interface */
   .app,.card,#loading,#pe-overlay,
   #header,#toolbar,#main,#sbar,
   #wall-panel,#rue-panel,#furn-panel,#door-panel,#couche-panel,
   #calque-modal,#input-modal,#confirm-modal{ display:none!important }
+  /* Conteneur d'impression visible */
+  #print-container{ display:block!important; }
   /* Une page = un wrapper par couche */
   #print-container .print-page{
     display:flex;flex-direction:column;align-items:center;justify-content:center;
     width:100vw;min-height:100vh;
     page-break-after:always;page-break-inside:avoid;break-after:page;break-inside:avoid;
+    margin:0;padding:0;
   }
   #print-container .print-page:last-child{page-break-after:avoid;break-after:avoid}
   #print-container .print-label{
@@ -239,8 +248,9 @@ canvas{display:block}
 
 <div class="step" id="s5">
   <div class="st">5 — Plan de vidéoprotection</div>
-  <div class="ss">Créez le plan de votre installation de vidéoprotection. Ce plan représente les pièces, les rues, les caméras et leurs zones de couverture. <strong>Facultatif</strong> — vous pouvez continuer sans plan.</div>
-  <div style="text-align:center;margin:18px 0 14px">
+  <!-- Bandeau réglementaire dynamique -->
+  <div id="plan-regle" style="margin-bottom:14px"></div>
+  <div style="text-align:center;margin:14px 0 14px">
     <button onclick="openPlanEditor()" style="background:#16213e;color:#7eb3ff;border:2px solid #3a6090;border-radius:10px;padding:13px 26px;font-size:14px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:10px;transition:all .2s" onmouseover="this.style.background='#1a4080';this.style.borderColor='#5a9fff'" onmouseout="this.style.background='#16213e';this.style.borderColor='#3a6090'">
       <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><rect x="2" y="2" width="20" height="20" rx="2"/><path d="M2 9h20M9 21V9"/><circle cx="16" cy="16" r="2.5" stroke="#e94560" fill="rgba(233,69,96,.2)"/><line x1="16" y1="13.5" x2="16" y2="11" stroke="#e94560"/></svg>
       ✏️ Ouvrir l'éditeur de plan
@@ -404,6 +414,9 @@ canvas{display:block}
     <button class="hbtn" onclick="saveProject()" style="background:#1a6030;border-color:#2a9050">💾 Sauvegarder</button>
     <button class="hbtn" onclick="document.getElementById('loadfile').click()" style="background:#0f3460;border-color:#2a6090">📂 Ouvrir</button>
     <input type="file" id="loadfile" accept=".pvs" style="display:none" onchange="loadProject(this)">
+    <span style="color:#7eb3ff;font-size:11px;margin-left:6px;margin-right:2px;white-space:nowrap">Format :</span>
+    <button id="fmt-a4" class="hbtn" onclick="setPlanFormat('A4')" style="background:#e94560;border-color:#ff6080;padding:5px 9px">A4</button>
+    <button id="fmt-a3" class="hbtn" onclick="setPlanFormat('A3')" style="padding:5px 9px">A3</button>
     <button class="hbtn" onclick="exportPNG()">🖼 PNG</button>
     <button class="hbtn" onclick="exportPDF()">📄 PDF</button>
   </div>
@@ -635,7 +648,50 @@ let cur=1,pers=[{n:'',p:'',f:''}],perims=[{n:'',e:'',t:'',v:'',c:'',m:''}];
 document.addEventListener('DOMContentLoaded',()=>{buildFins();renderPers();renderPerims();document.getElementById('dSign').value=new Date().toISOString().split('T')[0];updateNav();});
 function buildFins(){document.getElementById('fin-wrap').innerHTML=FINS.map(f=>`<label class="co" id="lf${f.id}" onclick="togF('${f.id}',this)"><input type="checkbox" id="${f.id}"><div class="ot">${f.lbl}</div></label>`).join('');}
 function nav(d){const n=cur+d;if(n<1||n>11)return;if(d>0&&!validate(cur))return;document.getElementById('s'+cur).classList.remove('active');cur=n;document.getElementById('s'+cur).classList.add('active');updateNav();window.scrollTo({top:0,behavior:'smooth'});}
-function updateNav(){document.getElementById('pg-step').textContent=`Étape ${cur} / 11`;document.getElementById('pg-name').textContent=SN[cur-1];document.getElementById('pgf').style.width=(cur/11*100)+'%';document.getElementById('nav-i').textContent=`${cur} / 11`;document.getElementById('btn-prev').style.visibility=cur===1?'hidden':'visible';const bn=document.getElementById('btn-next');if(cur===11){bn.textContent='✔ Générer le CERFA officiel';bn.className='btn bg';bn.onclick=gen;}else{bn.textContent='Suivant →';bn.className='btn bp';bn.onclick=()=>nav(1);}}
+function updateNav(){
+  document.getElementById('pg-step').textContent=`Étape ${cur} / 11`;
+  document.getElementById('pg-name').textContent=SN[cur-1];
+  document.getElementById('pgf').style.width=(cur/11*100)+'%';
+  document.getElementById('nav-i').textContent=`${cur} / 11`;
+  document.getElementById('btn-prev').style.visibility=cur===1?'hidden':'visible';
+  const bn=document.getElementById('btn-next');
+  if(cur===11){bn.textContent='✔ Générer le CERFA officiel';bn.className='btn bg';bn.onclick=gen;}
+  else{bn.textContent='Suivant →';bn.className='btn bp';bn.onclick=()=>nav(1);}
+  if(cur===5) updatePlanRegleBadge();
+}
+
+// Détermine si le plan est obligatoire selon la notice CERFA
+function planEstObligatoire(){
+  const lt=(document.querySelector('input[name="lt"]:checked')||{}).value||'4-1';
+  if(lt==='4-2') return true; // périmètre → plan obligatoire
+  // Voie publique (4-1 avec camV > 0) → plan obligatoire
+  const camV=parseInt((document.getElementById('camV')||{}).value)||0;
+  if(camV>0) return true;
+  // Intérieur : obligatoire si ≥ 8 caméras au total
+  const camI=parseInt((document.getElementById('camI')||{}).value)||0;
+  const camE=parseInt((document.getElementById('camE')||{}).value)||0;
+  return (camI+camE+camV)>=8;
+}
+
+function updatePlanRegleBadge(){
+  const el=document.getElementById('plan-regle');
+  if(!el) return;
+  const oblig=planEstObligatoire();
+  if(oblig){
+    el.innerHTML=`<div style="background:#fff8e1;border:1px solid #ffd54f;border-radius:6px;padding:10px 14px;font-size:12px;color:#5d4037;display:flex;align-items:flex-start;gap:10px">
+      <span style="font-size:18px;flex-shrink:0">⚠️</span>
+      <div><strong>Plan obligatoire</strong> pour votre dossier.<br>
+      Selon la notice CERFA : le plan de détail est requis dès 8 caméras ou en cas de voie publique / périmètre.<br>
+      <span style="color:#b07000">Ce plan sera automatiquement joint à vos documents générés.</span></div>
+    </div>`;
+  } else {
+    el.innerHTML=`<div style="background:#f0fff4;border:1px solid #b2dfdb;border-radius:6px;padding:10px 14px;font-size:12px;color:#2e7d52;display:flex;align-items:flex-start;gap:10px">
+      <span style="font-size:18px;flex-shrink:0">ℹ️</span>
+      <div><strong>Plan facultatif</strong> pour votre dossier (≤ 7 caméras en intérieur).<br>
+      Vous pouvez quand même en créer un pour accompagner votre demande.</div>
+    </div>`;
+  }
+}
 function validate(s){const e=[];if(s===2){if(!v('nom'))e.push('Nom');if(!v('prenom'))e.push('Prénom');if(!v('fonc'))e.push('Fonction');if(!v('denom'))e.push('Dénomination');if(!v('activ'))e.push('Activité');if(!v('aNom'))e.push('Nom de voie');if(!v('aCP'))e.push('Code postal');if(!v('aCom'))e.push('Commune');if(!v('aTel'))e.push('Téléphone');if(!v('cNom'))e.push('Contact forces');if(!v('cTel'))e.push('Tel contact');}if(s===3&&!FINS.some(f=>document.getElementById(f.id).checked))e.push('Au moins une finalité');if(s===6){const c=parseInt(v('conserv'));if(isNaN(c)||c<0||c>30)e.push('Conservation 0-30 jours');}if(s===10){if(!v('nbAff'))e.push('Nb affiches');if(!v('locAff'))e.push('Localisation');}if(s===11){if(!v('fSign'))e.push('Fonction signataire');if(!v('dSign'))e.push('Date');if(!v('dept'))e.push('Département');}if(e.length){alert('Champs requis :\n• '+e.join('\n• '));return false;}return true;}
 const v=id=>(document.getElementById(id)||{value:''}).value.trim();
 const chked=id=>(document.getElementById(id)||{checked:false}).checked;
@@ -5198,7 +5254,9 @@ function exportPDF(){
     const pad=G.sz*5*2;
     const mnX=b.mnX-pad,mnY=b.mnY-pad,bw=b.mxX-b.mnX+pad*2,bh=b.mxY-b.mnY+pad*2;
     const landscape=bw>=bh;
-    const pgW=landscape?1754:1240,pgH=landscape?1240:1754;
+    const _isA3=planPaperFormat==='A3';
+    const pgW=landscape?(_isA3?2480:1754):(_isA3?1754:1240);
+    const pgH=landscape?(_isA3?1754:1240):(_isA3?2480:1754);
     const pz=Math.min(pgW/bw,pgH/bh)*0.95;
     const pW=Math.round(bw*pz),pH=Math.round(bh*pz);
     const url=_renderLayerDataURL(L,pW,pH,pz,-mnX*pz,-mnY*pz);
@@ -5223,6 +5281,10 @@ function exportPDF(){
     im.complete ? Promise.resolve() :
     new Promise(res=>{im.onload=res; im.onerror=res;})
   );
+  // Appliquer le format de page choisi (A4 ou A3)
+  let _printStyle=document.getElementById('pe-page-style');
+  if(!_printStyle){_printStyle=document.createElement('style');_printStyle.id='pe-page-style';document.head.appendChild(_printStyle);}
+  _printStyle.textContent=`@page{size:${planPaperFormat};margin:0}`;
   Promise.all(waits).then(()=>requestAnimationFrame(()=>{
     window.onafterprint=function(){
       pc.style.display='none';
@@ -5339,6 +5401,16 @@ function _initPlanEditor(){
 }
 
 // ── Ouvrir / Fermer l'éditeur depuis le générateur ───────
+// ── Format papier du plan (A4 ou A3) ─────────────────────
+let planPaperFormat='A4';
+function setPlanFormat(fmt){
+  planPaperFormat=fmt;
+  const a4=document.getElementById('fmt-a4');
+  const a3=document.getElementById('fmt-a3');
+  if(a4){a4.style.background=fmt==='A4'?'#e94560':'#0f3460';a4.style.borderColor=fmt==='A4'?'#ff6080':'#3a6090';}
+  if(a3){a3.style.background=fmt==='A3'?'#e94560':'#0f3460';a3.style.borderColor=fmt==='A3'?'#ff6080':'#3a6090';}
+}
+
 function openPlanEditor(){
   const ov=document.getElementById('pe-overlay');
   ov.style.display='flex';
@@ -5377,33 +5449,72 @@ function _updateGenPlanPreview(){
 
 /* ── Export plan PNG si plan créé ── */
 async function exportPlanIfExists(d){
-  if(!_planEditorInited)return;
+  if(!_planEditorInited)return;  // jamais ouvert → rien
   _saveCurrentLayer();
-  let hasPlan=false;
+  // Vérifier si au moins une couche a du contenu
+  const hasPlan=layers.some(L=>!_layerBounds(L.walls,L.doors,L.wins,L.cams,L.lbls,L.rooms,L.rues).empty);
+  if(!hasPlan)return; // plan vide → rien à exporter
+
+  // Rendre chaque couche non-vide en image haute résolution
+  const pages=[];
   for(const L of layers){
     const b=_layerBounds(L.walls,L.doors,L.wins,L.cams,L.lbls,L.rooms,L.rues);
-    if(!b.empty){hasPlan=true;break;}
-  }
-  if(!hasPlan)return;
-  // Exporter le plan comme PNG
-  const results=[];
-  for(const L of layers){
-    const b=_layerBounds(L.walls,L.doors,L.wins,L.cams,L.lbls,L.rooms,L.rues);
-    if(b.empty){results.push(null);continue;}
+    if(b.empty) continue;
     const pad=G.sz*5*2;
-    const mnX=b.mnX-pad,mnY=b.mnY-pad,bw=b.mxX-b.mnX+pad*2,bh=b.mxY-b.mnY+pad*2;
-    const ez=Math.min(3000/Math.max(bw,bh),3);
-    const eW=Math.round(bw*ez),eH=Math.round(bh*ez);
-    results.push({url:_renderLayerDataURL(L,eW,eH,ez,-mnX*ez,-mnY*ez),name:L.name});
+    const mnX=b.mnX-pad, mnY=b.mnY-pad;
+    const bw=b.mxX-b.mnX+pad*2, bh=b.mxY-b.mnY+pad*2;
+    // Résolution cible à 150 dpi selon format choisi (paysage ou portrait selon proportions)
+    const landscape=bw>=bh;
+    const isA3=planPaperFormat==='A3';
+    const pgPxW=landscape?(isA3?2480:1754):(isA3?1754:1240);
+    const pgPxH=landscape?(isA3?1754:1240):(isA3?2480:1754);
+    const pz=Math.min(pgPxW/bw, pgPxH/bh)*0.95;
+    const pW=Math.max(1,Math.round(bw*pz)), pH=Math.max(1,Math.round(bh*pz));
+    const url=_renderLayerDataURL(L, pW, pH, pz, -mnX*pz, -mnY*pz);
+    pages.push({url, name:L.name, pW, pH, landscape, isA3});
   }
-  const multi=results.filter(Boolean).length>1;
-  results.filter(Boolean).forEach((r,i)=>{
-    setTimeout(()=>{
-      const a=document.createElement('a');
-      a.download='plan_videoprotection'+(multi?'_'+r.name:'')+'.png';
-      a.href=r.url;a.click();
-    },i*300+200);
-  });
+  if(!pages.length) return;
+
+  // Créer le PDF avec pdf-lib (déjà chargé pour le CERFA)
+  const {PDFDocument, rgb, StandardFonts}=PDFLib;
+  const pdfDoc=await PDFDocument.create();
+  const font=await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+  for(const p of pages){
+    // Convertir data URL PNG → bytes
+    const b64=p.url.split(',')[1];
+    const imgBytes=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+    const pngImg=await pdfDoc.embedPng(imgBytes);
+
+    // Dimensions en points PDF (72 dpi) : A4=595×842, A3=842×1191
+    const ptShort=p.isA3?841.89:595.28, ptLong=p.isA3?1190.55:841.89;
+    const pageW=p.landscape?ptLong:ptShort, pageH=p.landscape?ptShort:ptLong;
+    const page=pdfDoc.addPage([pageW,pageH]);
+
+    // Nom de la couche en haut
+    const labelH=18, margin=16;
+    page.drawText(p.name,{
+      x:margin, y:pageH-margin-10,
+      size:11, font, color:rgb(0.15,0.15,0.15)
+    });
+
+    // Image centrée sous le titre
+    const maxW=pageW-margin*2, maxH=pageH-margin*2-labelH*2;
+    const scale=Math.min(maxW/p.pW, maxH/p.pH);
+    const imgW=p.pW*scale, imgH=p.pH*scale;
+    const x=(pageW-imgW)/2;
+    const y=(pageH-labelH*2-imgH)/2;
+    page.drawImage(pngImg,{x, y, width:imgW, height:imgH});
+  }
+
+  // Télécharger le PDF
+  const pdfBytes=await pdfDoc.save();
+  const blob=new Blob([pdfBytes],{type:'application/pdf'});
+  const a=document.createElement('a');
+  a.download='plan_videoprotection.pdf';
+  a.href=URL.createObjectURL(blob);
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
 }
 
 </script><!-- Container d'impression multi-couches (caché sauf pendant window.print()) -->
