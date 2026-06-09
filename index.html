@@ -800,7 +800,7 @@ async function fillAndDownload(d){
   ck(p2,true,279.9,361.8);                              // retransmission oui
   ck(p2,true,274.2,380.8);                              // temps reel
   ck(p2,true,417.6,404.5);                              // certifie non
-  tf('Nom_installateur','SECUTECH');
+  // Nom_installateur laissé vide — champ conditionnel "si oui certifié"
   // Section 6 — personnes habilitees
   d.pers.forEach((p,i)=>{const n=i+1;tf(`NOM_${n}`,p.n);tf(`Prenom_${n}`,p.p);tf(`Fonctions_${n}`,p.f);});
   ck(p2,d.deleg==='oui',334.5,555);ck(p2,d.deleg==='non',359.4,555);
@@ -5242,57 +5242,62 @@ function exportPNG(){
   });
 }
 
-function exportPDF(){
+async function exportPDF(){
   _saveCurrentLayer();
-  const pc=document.getElementById('print-container');
-  pc.innerHTML='';
-  let hasContent=false;
-  const imgEls=[];
+  const pages=[];
   for(const L of layers){
     const b=_layerBounds(L.walls,L.doors,L.wins,L.cams,L.lbls,L.rooms,L.rues);
     if(b.empty) continue;
     const pad=G.sz*5*2;
-    const mnX=b.mnX-pad,mnY=b.mnY-pad,bw=b.mxX-b.mnX+pad*2,bh=b.mxY-b.mnY+pad*2;
-    const landscape=bw>=bh;
-    const _isA3=planPaperFormat==='A3';
-    const pgW=landscape?(_isA3?2480:1754):(_isA3?1754:1240);
-    const pgH=landscape?(_isA3?1754:1240):(_isA3?2480:1754);
-    const pz=Math.min(pgW/bw,pgH/bh)*0.95;
-    const pW=Math.round(bw*pz),pH=Math.round(bh*pz);
-    const url=_renderLayerDataURL(L,pW,pH,pz,-mnX*pz,-mnY*pz);
-    // Wrapper — une page entière par couche
-    const page=document.createElement('div');
-    page.className='print-page';
-    const lbl=document.createElement('div');
-    lbl.className='print-label';lbl.textContent=L.name;
-    const img=document.createElement('img');
-    img.src=url; img.alt=L.name;
-    imgEls.push(img);
-    page.appendChild(lbl); page.appendChild(img);
-    pc.appendChild(page);
-    hasContent=true;
+    const mnX=b.mnX-pad, mnY=b.mnY-pad;
+    const bw=b.mxX-b.mnX+pad*2, bh=b.mxY-b.mnY+pad*2;
+    const isA3=planPaperFormat==='A3';
+    // Toujours paysage
+    const pgPxW=isA3?2480:1754;
+    const pgPxH=isA3?1754:1240;
+    const pz=Math.min(pgPxW/bw, pgPxH/bh)*0.95;
+    const pW=Math.max(1,Math.round(bw*pz)), pH=Math.max(1,Math.round(bh*pz));
+    const url=_renderLayerDataURL(L, pW, pH, pz, -mnX*pz, -mnY*pz);
+    pages.push({url, name:L.name, pW, pH, isA3});
   }
   render(); // restaurer la vue courante
-  if(!hasContent) return;
-  // Afficher le container AVANT d'attendre (le navigateur peut décoder les images)
-  pc.style.display='block';
-  // Attendre que toutes les images soient décodées, puis un frame de rendu, puis imprimer
-  const waits=imgEls.map(im=>
-    im.complete ? Promise.resolve() :
-    new Promise(res=>{im.onload=res; im.onerror=res;})
-  );
-  // Appliquer le format de page choisi (A4 ou A3)
-  let _printStyle=document.getElementById('pe-page-style');
-  if(!_printStyle){_printStyle=document.createElement('style');_printStyle.id='pe-page-style';document.head.appendChild(_printStyle);}
-  _printStyle.textContent=`@page{size:${planPaperFormat};margin:0}`;
-  Promise.all(waits).then(()=>requestAnimationFrame(()=>{
-    window.onafterprint=function(){
-      pc.style.display='none';
-      pc.innerHTML='';
-      window.onafterprint=null;
-    };
-    window.print();
-  }));
+  if(!pages.length) return;
+
+  const {PDFDocument, rgb, StandardFonts}=PDFLib;
+  const pdfDoc=await PDFDocument.create();
+  const font=await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+  for(const p of pages){
+    const b64=p.url.split(',')[1];
+    const imgBytes=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+    const pngImg=await pdfDoc.embedPng(imgBytes);
+    // Dimensions en points PDF — toujours paysage : A4=841.89×595.28, A3=1190.55×841.89
+    const ptShort=p.isA3?841.89:595.28, ptLong=p.isA3?1190.55:841.89;
+    const pageW=ptLong, pageH=ptShort;
+    const page=pdfDoc.addPage([pageW,pageH]);
+    // Nom de la couche en haut à gauche
+    const margin=16, labelH=18;
+    page.drawText(p.name,{x:margin, y:pageH-margin-10, size:11, font, color:rgb(0.15,0.15,0.15)});
+    // Image centrée sous le label
+    const maxW=pageW-margin*2, maxH=pageH-margin*2-labelH*2;
+    const scale=Math.min(maxW/p.pW, maxH/p.pH);
+    const imgW=p.pW*scale, imgH=p.pH*scale;
+    const x=(pageW-imgW)/2;
+    const y=(pageH-labelH*2-imgH)/2;
+    page.drawImage(pngImg,{x, y, width:imgW, height:imgH});
+  }
+
+  const pdfBytes=await pdfDoc.save();
+  const blob=new Blob([pdfBytes],{type:'application/pdf'});
+  let fname=prompt('Nom du fichier PDF :','plan_videoprotection');
+  if(fname===null) return; // annulé
+  fname=fname.trim()||'plan_videoprotection';
+  if(!fname.toLowerCase().endsWith('.pdf')) fname+='.pdf';
+  const a=document.createElement('a');
+  a.download=fname;
+  a.href=URL.createObjectURL(blob);
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
 }
 
 // ── Sauvegarde / Chargement projet ───────────────────────
@@ -5463,8 +5468,8 @@ async function exportPlanIfExists(d){
     const pad=G.sz*5*2;
     const mnX=b.mnX-pad, mnY=b.mnY-pad;
     const bw=b.mxX-b.mnX+pad*2, bh=b.mxY-b.mnY+pad*2;
-    // Résolution cible à 150 dpi selon format choisi (paysage ou portrait selon proportions)
-    const landscape=bw>=bh;
+    // Résolution cible à 150 dpi selon format choisi — toujours paysage
+    const landscape=true;
     const isA3=planPaperFormat==='A3';
     const pgPxW=landscape?(isA3?2480:1754):(isA3?1754:1240);
     const pgPxH=landscape?(isA3?1754:1240):(isA3?2480:1754);
